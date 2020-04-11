@@ -8,6 +8,11 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"time"
+
+	_ "github.com/go-sql-driver/mysql"
+
+	"github.com/vosgaust/covid19/entries"
 )
 
 var stateCodes = map[string]string{
@@ -42,78 +47,129 @@ type entry struct {
 }
 
 func main() {
+	cfg, err := getConfig()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	entriesRepository := entries.NewMySQL(cfg.MySQL)
+	defer entriesRepository.Close()
+
 	csvFile, _ := os.Open("input.csv")
 	reader := csv.NewReader(bufio.NewReader(csvFile))
 
 	command := os.Args[1]
-	option := ""
+	subcommand := ""
 	if len(os.Args) > 2 {
-		option = os.Args[2]
+		subcommand = os.Args[2]
+	}
+	state := ""
+	if len(os.Args) > 3 {
+		state = os.Args[3]
 	}
 
 	switch command {
 	case "historic":
-		if option != "" {
-			getHistoricPerState(os.Args[2], aggregateByState(reader))
-		} else {
-			totals := aggreateByDate(reader)
-			for _, value := range totals {
-				fmt.Printf("%v %v %v %v %v\n", value.date, value.infected, value.dead, value.recovered, value.active)
+		switch subcommand {
+		case "deltas":
+			if state == "" {
+				result, err := entriesRepository.GetCountryDeltas()
+				if err != nil {
+					panic(err.Error())
+				}
+				for _, entry := range result {
+					fmt.Printf("%s %s %d %d %d %d\n", entry.Date, entry.Country, entry.Infected, entry.Dead, entry.Recovered, entry.Active)
+				}
+			} else {
+				result, err := entriesRepository.GetStateDeltas(state)
+				if err != nil {
+					panic(err.Error())
+				}
+				for _, entry := range result {
+					fmt.Printf("%s %s %d %d %d %d\n", entry.Date, entry.Country, entry.Infected, entry.Dead, entry.Recovered, entry.Active)
+				}
 			}
-			// getHistoric(aggregateByState(reader))
+		case "cumulative":
+			if state == "" {
+				result, err := entriesRepository.GetCountryCumulative()
+				if err != nil {
+					panic(err.Error())
+				}
+				for _, entry := range result {
+					fmt.Printf("%s %s %d %d %d %d\n", entry.Date, entry.Country, entry.Infected, entry.Dead, entry.Recovered, entry.Active)
+				}
+			} else {
+				result, err := entriesRepository.GetStateCumulative(state)
+				if err != nil {
+					panic(err.Error())
+				}
+				for _, entry := range result {
+					fmt.Printf("%s %s %d %d %d %d\n", entry.Date, entry.Country, entry.Infected, entry.Dead, entry.Recovered, entry.Active)
+				}
+			}
 		}
 	case "summary":
-		if option != "" {
-			getSummaryPerState(os.Args[2], aggregateByState(reader))
-		} else {
-			for state := range aggregateByState(reader) {
-				fmt.Printf("%v ", state)
-				getSummaryPerState(state, aggregateByState(reader))
+		switch subcommand {
+		case "deltas":
+			if state == "" {
+				fmt.Println(entriesRepository.GetCountrySummaryDeltas())
+			} else {
+				fmt.Println(entriesRepository.GetStateSummaryDeltas(state))
+			}
+		case "cumulative":
+			if state == "" {
+				fmt.Println(entriesRepository.GetCountrySummaryCumulative())
+			} else {
+				fmt.Println(entriesRepository.GetStateSummaryCumulative(state))
+			}
+		}
+	case "collect":
+		entries := parseCSV(reader)
+		totalDeltas := processDeltas(entries)
+		for _, entry := range totalDeltas {
+			_, err = entriesRepository.Insert(entry)
+			if err != nil {
+				log.Println(err.Error())
 			}
 		}
 	}
 }
 
-func aggreateByDate(reader *csv.Reader) map[string]*entry {
-	var totals = make(map[string]*entry)
-	for {
-		line, error := reader.Read()
-		if error == io.EOF {
-			break
-		} else if len(line) != 7 {
-			continue
-		} else if error != nil {
-			log.Fatal(error)
+func processDeltas(totals []entries.Entry) []entries.Entry {
+	var lastAdded = make(map[string]entries.Entry)
+	var result []entries.Entry
+	for _, entry := range totals {
+		resultingEntry := entry
+		if lastEntry, ok := lastAdded[entry.State]; ok {
+			resultingEntry = entries.Entry{
+				Date:         entry.Date,
+				State:        entry.State,
+				Country:      entry.Country,
+				Infected:     entry.Infected - lastEntry.Infected,
+				Hospitalized: entry.Hospitalized - lastEntry.Hospitalized,
+				Critical:     entry.Critical - lastEntry.Critical,
+				Dead:         entry.Dead - lastEntry.Dead,
+				Recovered:    entry.Recovered - lastEntry.Recovered,
+				Active:       entry.Active - lastEntry.Active}
 		}
-
-		date := line[1]
-		infected := getNumber(line[2])
-		dead := getNumber(line[5])
-		recovered := getNumber(line[6])
-		newEntry := entry{
-			date:         line[1],
-			infected:     infected,
-			hospitalized: getNumber(line[3]),
-			critical:     getNumber(line[4]),
-			dead:         dead,
-			recovered:    recovered,
-			active:       infected - dead - recovered}
-		if totals[date] != nil {
-			totals[date].infected += newEntry.infected
-			totals[date].hospitalized += newEntry.hospitalized
-			totals[date].critical += newEntry.critical
-			totals[date].dead += newEntry.dead
-			totals[date].recovered += newEntry.recovered
-			totals[date].active += newEntry.active
-		} else {
-			totals[date] = &newEntry
-		}
+		fmt.Println(resultingEntry)
+		lastAdded[entry.State] = entry
+		result = append(result, resultingEntry)
 	}
-	return totals
+	return result
 }
 
-func aggregateByState(reader *csv.Reader) map[string][]entry {
-	var totals = make(map[string][]entry)
+func formatDate(date string) string {
+	layout := "2/1/2006"
+	t, err := time.Parse(layout, date)
+	if err != nil {
+		fmt.Println(err)
+	}
+	return t.Format("2006-01-02")
+}
+
+func parseCSV(reader *csv.Reader) []entries.Entry {
+	var totals []entries.Entry
 	for {
 		line, error := reader.Read()
 		if error == io.EOF {
@@ -124,23 +180,21 @@ func aggregateByState(reader *csv.Reader) map[string][]entry {
 			log.Fatal(error)
 		}
 
-		state := stateCodes[line[0]]
+		date := formatDate(line[1])
 		infected := getNumber(line[2])
 		dead := getNumber(line[5])
 		recovered := getNumber(line[6])
-		newEntry := entry{
-			date:         line[1],
-			infected:     infected,
-			hospitalized: getNumber(line[3]),
-			critical:     getNumber(line[4]),
-			dead:         dead,
-			recovered:    recovered,
-			active:       infected - dead - recovered}
-		if totals[state] != nil {
-			totals[state] = append(totals[state], newEntry)
-		} else {
-			totals[state] = []entry{newEntry}
-		}
+		newEntry := entries.Entry{
+			Date:         date,
+			Country:      "SP",
+			State:        line[0],
+			Infected:     infected,
+			Hospitalized: getNumber(line[3]),
+			Critical:     getNumber(line[4]),
+			Dead:         dead,
+			Recovered:    recovered,
+			Active:       infected - dead - recovered}
+		totals = append(totals, newEntry)
 	}
 	return totals
 }
@@ -154,28 +208,4 @@ func getNumber(input string) int {
 		log.Fatal(err)
 	}
 	return number
-}
-
-func getHistoricPerState(state string, totals map[string][]entry) {
-	for _, day := range totals[state] {
-		fmt.Printf("%v %v %v %v %v\n", day.date, day.infected, day.dead, day.recovered, day.active)
-	}
-}
-
-func getHistoric(totals map[string][]entry) {
-	fmt.Println()
-}
-
-func getSummaryPerState(state string, totals map[string][]entry) {
-	days := len(totals[state])
-	today := totals[state][days-1]
-	yesterday := totals[state][days-2]
-	delta := entry{date: today.date,
-		infected:     today.infected - yesterday.infected,
-		hospitalized: today.hospitalized - yesterday.hospitalized,
-		critical:     today.critical - yesterday.critical,
-		dead:         today.dead - yesterday.dead,
-		recovered:    today.recovered - yesterday.recovered,
-		active:       today.active - yesterday.active}
-	fmt.Printf("%v %v %v %v %v\n", delta.date, delta.infected, delta.dead, delta.recovered, delta.active)
 }
