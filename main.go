@@ -36,16 +36,6 @@ var stateCodes = map[string]string{
 	"ML": "Melilla",
 	"CE": "Ceuta"}
 
-type entry struct {
-	date         string
-	infected     int
-	hospitalized int
-	critical     int
-	dead         int
-	recovered    int
-	active       int
-}
-
 func main() {
 	cfg, err := getConfig()
 	if err != nil {
