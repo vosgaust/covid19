@@ -15,27 +15,6 @@ import (
 	"github.com/vosgaust/covid19/entries"
 )
 
-var stateCodes = map[string]string{
-	"AN": "Andalucia",
-	"AR": "Aragon",
-	"AS": "Asturias",
-	"CN": "Canarias",
-	"CB": "Cantabria",
-	"CM": "Castilla-Lamancha",
-	"CL": "Castilla-Leon",
-	"CT": "Catalunya",
-	"EX": "Extremadura",
-	"GA": "Galicia",
-	"IB": "Baleares",
-	"RI": "Rioja",
-	"MD": "Madrid",
-	"MC": "Murcia",
-	"NC": "Navarra",
-	"PV": "PaisVasco",
-	"VC": "Valenciana",
-	"ML": "Melilla",
-	"CE": "Ceuta"}
-
 func main() {
 	cfg, err := getConfig()
 	if err != nil {
