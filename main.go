@@ -43,85 +43,72 @@ func main() {
 	}
 
 	entriesRepository := entries.NewMySQL(cfg.MySQL)
+	entriesService := entries.NewService(entriesRepository)
 	defer entriesRepository.Close()
 
-	csvFile, _ := os.Open("input.csv")
-	reader := csv.NewReader(bufio.NewReader(csvFile))
+	if len(os.Args) < 2 {
+		run(cfg)
+	} else {
+		command := os.Args[1]
+		subcommand := ""
+		if len(os.Args) > 2 {
+			subcommand = os.Args[2]
+		}
+		state := ""
+		if len(os.Args) > 3 {
+			state = os.Args[3]
+		}
 
-	command := os.Args[1]
-	subcommand := ""
-	if len(os.Args) > 2 {
-		subcommand = os.Args[2]
-	}
-	state := ""
-	if len(os.Args) > 3 {
-		state = os.Args[3]
-	}
+		csvFile, _ := os.Open("input.csv")
+		reader := csv.NewReader(bufio.NewReader(csvFile))
 
-	switch command {
-	case "historic":
-		switch subcommand {
-		case "deltas":
-			if state == "" {
-				result, err := entriesRepository.GetCountryDeltas()
+		switch command {
+		case "historic":
+			switch subcommand {
+			case "deltas":
+				result, err := entriesService.GetDeltas(state)
 				if err != nil {
 					panic(err.Error())
 				}
-				for _, entry := range result {
-					fmt.Printf("%s %s %d %d %d %d\n", entry.Date, entry.Country, entry.Infected, entry.Dead, entry.Recovered, entry.Active)
-				}
-			} else {
-				result, err := entriesRepository.GetStateDeltas(state)
+				printResult(result)
+			case "cumulative":
+				result, err := entriesService.GetCumulative(state)
 				if err != nil {
 					panic(err.Error())
 				}
-				for _, entry := range result {
-					fmt.Printf("%s %s %d %d %d %d\n", entry.Date, entry.Country, entry.Infected, entry.Dead, entry.Recovered, entry.Active)
+				printResult(result)
+			}
+		case "summary":
+			switch subcommand {
+			case "deltas":
+				if state == "" {
+					fmt.Println(entriesRepository.GetCountrySummaryDeltas())
+				} else {
+					fmt.Println(entriesRepository.GetStateSummaryDeltas(state))
+				}
+			case "cumulative":
+				if state == "" {
+					fmt.Println(entriesRepository.GetCountrySummaryCumulative())
+				} else {
+					fmt.Println(entriesRepository.GetStateSummaryCumulative(state))
 				}
 			}
-		case "cumulative":
-			if state == "" {
-				result, err := entriesRepository.GetCountryCumulative()
+		case "collect":
+			entries := parseCSV(reader)
+			totalDeltas := processDeltas(entries)
+			for _, entry := range totalDeltas {
+				_, err = entriesRepository.Insert(entry)
 				if err != nil {
-					panic(err.Error())
-				}
-				for _, entry := range result {
-					fmt.Printf("%s %s %d %d %d %d\n", entry.Date, entry.Country, entry.Infected, entry.Dead, entry.Recovered, entry.Active)
-				}
-			} else {
-				result, err := entriesRepository.GetStateCumulative(state)
-				if err != nil {
-					panic(err.Error())
-				}
-				for _, entry := range result {
-					fmt.Printf("%s %s %d %d %d %d\n", entry.Date, entry.Country, entry.Infected, entry.Dead, entry.Recovered, entry.Active)
+					log.Println(err.Error())
 				}
 			}
 		}
-	case "summary":
-		switch subcommand {
-		case "deltas":
-			if state == "" {
-				fmt.Println(entriesRepository.GetCountrySummaryDeltas())
-			} else {
-				fmt.Println(entriesRepository.GetStateSummaryDeltas(state))
-			}
-		case "cumulative":
-			if state == "" {
-				fmt.Println(entriesRepository.GetCountrySummaryCumulative())
-			} else {
-				fmt.Println(entriesRepository.GetStateSummaryCumulative(state))
-			}
-		}
-	case "collect":
-		entries := parseCSV(reader)
-		totalDeltas := processDeltas(entries)
-		for _, entry := range totalDeltas {
-			_, err = entriesRepository.Insert(entry)
-			if err != nil {
-				log.Println(err.Error())
-			}
-		}
+	}
+}
+
+func printResult(entries []entries.Entry) {
+	for _, entry := range entries {
+		fmt.Printf("%s %s %d %d %d %d\n", entry.Date, entry.Country, entry.Infected, entry.Dead, entry.Recovered, entry.Active)
 	}
 }
 
